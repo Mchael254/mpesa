@@ -40,7 +40,8 @@ export const initiateSTKPush = async (req, res) => {
         ).toString('base64');
 
         // callback url
-        const callback_url = `${process.env.CALLBACK_BASE_URL}/api/stkPushCallback/${Order_ID}`;
+        const callback_url = `https://mpesa-dogr.onrender.com/api/stkPushCallback/${Order_ID}`;
+
         console.log(`📡 Initiating STK Push with callback: ${callback_url}`);
 
         const payload = {
@@ -195,3 +196,5 @@ export const confirmPayment = async (req, res) => {
         })
     }
 }
+
+

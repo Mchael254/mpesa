@@ -12,13 +12,6 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json({
     type: ['application/json', 'application/*+json']
 }));
-app.use((req, res, next) => {
-    console.log(`➡️  ${req.method} ${req.originalUrl}`);
-    console.log("Headers:", req.headers);
-    console.log("Body:", JSON.stringify(req.body, null, 2));
-    next();
-});
-
 
 
 // import routes
