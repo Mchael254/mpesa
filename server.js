@@ -1,7 +1,6 @@
 import express from "express";
 import cors from "cors";
 import 'dotenv/config'
-import axios from "axios";
 // initialize express
 const app = express()
 
