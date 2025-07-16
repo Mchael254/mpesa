@@ -6,7 +6,9 @@ import axios from "axios";
 // @method POST
 // @route /stkPush
 // @access public
-
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY; // use service role key for RPC inserts
+const supabase = createClient(supabaseUrl, supabaseKey);
 function parseDate(val) {
     return (val < 10) ? "0" + val : val;
 }
@@ -112,6 +114,41 @@ export const stkPushCallback = async (req, res) => {
             };
         }
 
+        // Convert transaction date (format like 20230715123045) to ISO string for timestamptz
+        let transactionDateISO = null;
+        if (paymentDetails.TransactionDate) {
+            const tdStr = paymentDetails.TransactionDate.toString();
+            if (/^\d{14}$/.test(tdStr)) {
+                const year = tdStr.slice(0, 4);
+                const month = tdStr.slice(4, 6);
+                const day = tdStr.slice(6, 8);
+                const hour = tdStr.slice(8, 10);
+                const minute = tdStr.slice(10, 12);
+                const second = tdStr.slice(12, 14);
+                transactionDateISO = `${year}-${month}-${day}T${hour}:${minute}:${second}Z`;
+            }
+        }
+
+        // Insert into Supabase via RPC
+        const { error } = await supabase.rpc('insert_mpesa_callback', {
+            p_order_id: Order_ID,
+            p_merchant_request_id: MerchantRequestID,
+            p_checkout_request_id: CheckoutRequestID,
+            p_result_code: ResultCode,
+            p_result_desc: ResultDesc,
+            p_amount: paymentDetails.Amount ?? null,
+            p_mpesa_receipt_number: paymentDetails.MpesaReceiptNumber ?? null,
+            p_transaction_date: transactionDateISO,
+            p_phone_number: paymentDetails.PhoneNumber ?? null,
+        });
+
+        if (error) {
+            console.error('Supabase RPC insert error:', error);
+            throw new Error('Failed to save callback data');
+        }
+
+        console.log('M-Pesa callback saved to database.');
+
         // Log all details in a readable format
         console.log("\n" + "=".repeat(50));
         console.log("💰 MPESA STK CALLBACK RECEIVED");
@@ -121,7 +158,7 @@ export const stkPushCallback = async (req, res) => {
         console.log(`🛒 Checkout Request ID: ${CheckoutRequestID}`);
         console.log(`🟢 Result Code: ${ResultCode}`);
         console.log(`📝 Result Description: ${ResultDesc}`);
-        
+
         if (Object.keys(paymentDetails).length > 0) {
             console.log("\n💳 Payment Details:");
             console.log(`   💰 Amount: ${paymentDetails.Amount}`);
