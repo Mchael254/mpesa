@@ -82,105 +82,124 @@ export const initiateSTKPush = async (req, res) => {
 // @method POST
 // @route /stkPushCallback/:Order_ID
 // @access public
-export const stkPushCallback = async (req, res) => {
-    try {
-        console.log("📢 FULL CALLBACK RECEIVED:", JSON.stringify(req.body, null, 2));
+const querySTKStatus = async (checkoutRequestID) => {
+  const timestamp = getTimestamp();
+  const password = Buffer.from(
+    process.env.BUSINESS_SHORT_CODE + process.env.PASS_KEY + timestamp
+  ).toString('base64');
 
-        const { Order_ID } = req.params;
-        const callbackData = req.body?.Body?.stkCallback;
+  const token = await getSafaricomToken();
 
-        if (!callbackData) {
-            console.error("❌ Invalid callback structure received");
-            console.log("Received payload:", req.body);
-            throw new Error("Invalid callback structure: stkCallback missing");
-        }
-
-        const {
-            MerchantRequestID,
-            CheckoutRequestID,
-            ResultCode,
-            ResultDesc,
-            CallbackMetadata
-        } = callbackData;
-
-        // Extract metadata if available
-        let paymentDetails = {};
-        if (CallbackMetadata?.Item) {
-            const meta = CallbackMetadata.Item;
-            paymentDetails = {
-                Amount: meta.find(o => o.Name === "Amount")?.Value,
-                MpesaReceiptNumber: meta.find(o => o.Name === "MpesaReceiptNumber")?.Value,
-                TransactionDate: meta.find(o => o.Name === "TransactionDate")?.Value,
-                PhoneNumber: meta.find(o => o.Name === "PhoneNumber")?.Value
-            };
-        }
-
-        // Convert transaction date (format like 20230715123045) to ISO string for timestamptz
-        let transactionDateISO = null;
-        if (paymentDetails.TransactionDate) {
-            const tdStr = paymentDetails.TransactionDate.toString();
-            if (/^\d{14}$/.test(tdStr)) {
-                const year = tdStr.slice(0, 4);
-                const month = tdStr.slice(4, 6);
-                const day = tdStr.slice(6, 8);
-                const hour = tdStr.slice(8, 10);
-                const minute = tdStr.slice(10, 12);
-                const second = tdStr.slice(12, 14);
-                transactionDateISO = `${year}-${month}-${day}T${hour}:${minute}:${second}Z`;
-            }
-        }
-
-        // Insert into Supabase via RPC
-        const { error } = await supabase.rpc('insert_mpesa_callback', {
-            p_order_id: Order_ID,
-            p_merchant_request_id: MerchantRequestID,
-            p_checkout_request_id: CheckoutRequestID,
-            p_result_code: ResultCode,
-            p_result_desc: ResultDesc,
-            p_amount: paymentDetails.Amount ?? null,
-            p_mpesa_receipt_number: paymentDetails.MpesaReceiptNumber ?? null,
-            p_transaction_date: transactionDateISO,
-            p_phone_number: paymentDetails.PhoneNumber ?? null,
-        });
-
-        if (error) {
-            console.error('Supabase RPC insert error:', error);
-            throw new Error('Failed to save callback data');
-        }
-
-        console.log('M-Pesa callback saved to database.');
-
-        // Log all details in a readable format
-        console.log("\n" + "=".repeat(50));
-        console.log("💰 MPESA STK CALLBACK RECEIVED");
-        console.log("-".repeat(50));
-        console.log(`🆔 Order ID: ${Order_ID}`);
-        console.log(`📛 Merchant Request ID: ${MerchantRequestID}`);
-        console.log(`🛒 Checkout Request ID: ${CheckoutRequestID}`);
-        console.log(`🟢 Result Code: ${ResultCode}`);
-        console.log(`📝 Result Description: ${ResultDesc}`);
-
-        if (Object.keys(paymentDetails).length > 0) {
-            console.log("\n💳 Payment Details:");
-            console.log(`   💰 Amount: ${paymentDetails.Amount}`);
-            console.log(`   📄 Receipt Number: ${paymentDetails.MpesaReceiptNumber}`);
-            console.log(`   📱 Phone Number: ${paymentDetails.PhoneNumber}`);
-            console.log(`   📅 Transaction Date: ${paymentDetails.TransactionDate}`);
-        }
-        console.log("=".repeat(50) + "\n");
-
-        res.json({ success: true, received: true });
-
-    } catch (e) {
-        console.error("❌ Error processing callback:", e.message);
-        res.status(400).json({
-            success: false,
-            error: e.message,
-            receivedBody: req.body
-        });
+  const { data } = await axios.post(
+    'https://sandbox.safaricom.co.ke/mpesa/stkpushquery/v1/query',
+    {
+      BusinessShortCode: process.env.BUSINESS_SHORT_CODE,
+      Password: password,
+      Timestamp: timestamp,
+      CheckoutRequestID: checkoutRequestID,
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
     }
+  );
+
+  return data;
 };
 
+// CALLBACK HANDLER
+export const stkPushCallback = async (req, res) => {
+  try {
+    console.log("📢 FULL CALLBACK RECEIVED:", JSON.stringify(req.body, null, 2));
+    const { Order_ID } = req.params;
+    const callbackData = req.body?.Body?.stkCallback;
+
+    if (!callbackData) {
+      throw new Error("Invalid callback structure: stkCallback missing");
+    }
+
+    const {
+      MerchantRequestID,
+      CheckoutRequestID,
+      ResultCode,
+      ResultDesc,
+      CallbackMetadata
+    } = callbackData;
+
+    let paymentDetails = {
+      Amount: null,
+      MpesaReceiptNumber: null,
+      TransactionDate: null,
+      PhoneNumber: null
+    };
+
+    if (CallbackMetadata?.Item) {
+      const meta = CallbackMetadata.Item;
+      paymentDetails = {
+        Amount: meta.find(o => o.Name === "Amount")?.Value ?? null,
+        MpesaReceiptNumber: meta.find(o => o.Name === "MpesaReceiptNumber")?.Value ?? null,
+        TransactionDate: meta.find(o => o.Name === "TransactionDate")?.Value ?? null,
+        PhoneNumber: meta.find(o => o.Name === "PhoneNumber")?.Value ?? null
+      };
+    }
+
+    // Fallback if metadata missing on success
+    if (ResultCode === 0 && !paymentDetails.MpesaReceiptNumber) {
+      console.warn("⚠️ Callback metadata missing! Querying Safaricom for transaction status...");
+      const query = await querySTKStatus(CheckoutRequestID);
+      console.log("🔁 STK Query Response:", query);
+
+      if (query.ResponseCode === "0" && query.ResultCode === "0") {
+        // Still no metadata available from query API, log and proceed
+        paymentDetails = {
+          Amount: paymentDetails.Amount ?? null,
+          MpesaReceiptNumber: query.MpesaReceiptNumber ?? null,
+          TransactionDate: paymentDetails.TransactionDate ?? null,
+          PhoneNumber: paymentDetails.PhoneNumber ?? null,
+        };
+      } else {
+        console.warn("❌ Failed to recover metadata. Safaricom query response not successful.");
+      }
+    }
+
+    // Format transaction date
+    let transactionDateISO = null;
+    if (paymentDetails.TransactionDate && /^\d{14}$/.test(paymentDetails.TransactionDate.toString())) {
+      const tdStr = paymentDetails.TransactionDate.toString();
+      transactionDateISO = `${tdStr.slice(0, 4)}-${tdStr.slice(4, 6)}-${tdStr.slice(6, 8)}T${tdStr.slice(8, 10)}:${tdStr.slice(10, 12)}:${tdStr.slice(12, 14)}Z`;
+    }
+
+    // Insert to Supabase
+    const { error } = await supabase.rpc('insert_mpesa_callback', {
+      p_order_id: Order_ID,
+      p_merchant_request_id: MerchantRequestID,
+      p_checkout_request_id: CheckoutRequestID,
+      p_result_code: ResultCode,
+      p_result_desc: ResultDesc,
+      p_amount: paymentDetails.Amount,
+      p_mpesa_receipt_number: paymentDetails.MpesaReceiptNumber,
+      p_transaction_date: transactionDateISO,
+      p_phone_number: paymentDetails.PhoneNumber,
+    });
+
+    if (error) {
+      console.error('❌ Supabase RPC insert error:', error);
+      throw new Error('Failed to save callback data');
+    }
+
+    console.log("✅ M-Pesa callback saved to database");
+    res.json({ success: true, received: true });
+
+  } catch (e) {
+    console.error("❌ Error processing callback:", e.message);
+    res.status(400).json({
+      success: false,
+      error: e.message,
+      receivedBody: req.body
+    });
+  }
+};
 
 
 // @desc Check from safaricom servers the status of a transaction
