@@ -1,6 +1,7 @@
 import request from "request";
 import 'dotenv/config'
 import axios from "axios";
+import { createClient } from '@supabase/supabase-js';
 
 // @desc initiate stk push
 // @method POST
