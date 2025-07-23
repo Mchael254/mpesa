@@ -16,6 +16,9 @@ const io = new SocketIOServer(httpServer, {
   }
 });
 
+// ✅ ATTACH SOCKET.IO TO EXPRESS APP - This is what was missing!
+app.set('io', io);
+
 // middlewares
 app.use(cors());
 app.use(express.urlencoded({ extended: true }));
