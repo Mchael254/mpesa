@@ -24,6 +24,11 @@ app.use(express.json({
   type: ['application/json', 'application/*+json']
 }));
 
+app.get('/', (req, res) => {
+  console.log('Root route hit!'); // Add logging
+  res.send("Welcome to Venumux");
+});
+
 // import routes
 import lipaNaMpesaRoutes from "./routes/routes.lipanampesa.js";
 app.use('/api', lipaNaMpesaRoutes);
