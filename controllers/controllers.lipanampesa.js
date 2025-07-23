@@ -109,14 +109,16 @@ const querySTKStatus = async (checkoutRequestID) => {
 };
 
 // CALLBACK HANDLER
+// CALLBACK HANDLER
 export const stkPushCallback = async (req, res) => {
   const io = req.app.get('io'); // 🔌 Get Socket.IO instance
+  const { Order_ID } = req.params; // ✅ Extract Order_ID first
+  
   console.log("📦 Order_ID:", Order_ID);
   console.log("📦 Socket.IO status:", !!io);
 
   try {
     console.log("📢 FULL CALLBACK RECEIVED:", JSON.stringify(req.body, null, 2));
-    const { Order_ID } = req.params;
     const callbackData = req.body?.Body?.stkCallback;
 
     if (!callbackData) {
@@ -211,9 +213,9 @@ export const stkPushCallback = async (req, res) => {
   } catch (e) {
     console.error("❌ Error processing callback:", e.message);
 
-    io.to(req.params.Order_ID).emit('paymentStatus', {
+    io.to(Order_ID).emit('paymentStatus', {
       event: 'payment_status',
-      orderId: req.params.Order_ID,
+      orderId: Order_ID,
       status: 'failed',
       message: e.message,
     });
