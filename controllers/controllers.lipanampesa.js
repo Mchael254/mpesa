@@ -110,6 +110,7 @@ const querySTKStatus = async (checkoutRequestID) => {
 
 // CALLBACK HANDLER
 export const stkPushCallback = async (req, res) => {
+  const io = req.app.get('io'); // 🔌 Get Socket.IO instance
   try {
     console.log("📢 FULL CALLBACK RECEIVED:", JSON.stringify(req.body, null, 2));
     const { Order_ID } = req.params;
@@ -144,14 +145,13 @@ export const stkPushCallback = async (req, res) => {
       };
     }
 
-    // Fallback if metadata missing on success
+    // Fallback if metadata missing
     if (ResultCode === 0 && !paymentDetails.MpesaReceiptNumber) {
       console.warn("⚠️ Callback metadata missing! Querying Safaricom for transaction status...");
       const query = await querySTKStatus(CheckoutRequestID);
       console.log("🔁 STK Query Response:", query);
 
       if (query.ResponseCode === "0" && query.ResultCode === "0") {
-        // Still no metadata available from query API, log and proceed
         paymentDetails = {
           Amount: paymentDetails.Amount ?? null,
           MpesaReceiptNumber: query.MpesaReceiptNumber ?? null,
@@ -189,10 +189,32 @@ export const stkPushCallback = async (req, res) => {
     }
 
     console.log("✅ M-Pesa callback saved to database");
+
+    // 🔔 Emit status update to specific room (Order_ID)
+    io.to(Order_ID).emit('paymentStatus', {
+      event: 'payment_status',
+      orderId: Order_ID,
+      status: ResultCode === 0 ? 'success' : 'failed',
+      receipt: paymentDetails.MpesaReceiptNumber,
+      transactionId: CheckoutRequestID,
+      transactionDate: paymentDetails.TransactionDate,
+      phoneNumber: paymentDetails.PhoneNumber,
+      amount: paymentDetails.Amount,
+      message: ResultDesc,
+    });
+
     res.json({ success: true, received: true });
 
   } catch (e) {
     console.error("❌ Error processing callback:", e.message);
+
+    io.to(req.params.Order_ID).emit('paymentStatus', {
+      event: 'payment_status',
+      orderId: req.params.Order_ID,
+      status: 'failed',
+      message: e.message,
+    });
+
     res.status(400).json({
       success: false,
       error: e.message,
