@@ -43,6 +43,18 @@ io.on("connection", (socket) => {
     console.log(`❌ Client disconnected: ${socket.id}`);
   });
 
+  // ✅ Handle joining payment rooms
+  socket.on("join", (orderId) => {
+    socket.join(orderId);
+    console.log(`🏠 Socket ${socket.id} joined room: ${orderId}`);
+  });
+
+  // ✅ Handle leaving payment rooms
+  socket.on("leave", (orderId) => {
+    socket.leave(orderId);
+    console.log(`🚪 Socket ${socket.id} left room: ${orderId}`);
+  });
+
   // Example: listening to client events
   socket.on("custom-event", (data) => {
     console.log("Received custom-event:", data);
