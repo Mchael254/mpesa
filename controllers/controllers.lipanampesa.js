@@ -8,74 +8,92 @@ import { createClient } from '@supabase/supabase-js';
 // @route /stkPush
 // @access public
 const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY; // use service role key for RPC inserts
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 function parseDate(val) {
-    return (val < 10) ? "0" + val : val;
+  return (val < 10) ? "0" + val : val;
 }
 
 const getTimestamp = () => {
 
-    const dateString = new Date().toLocaleString("en-us", { timeZone: "Africa/Nairobi" })
-    const dateObject = new Date(dateString);
-    const month = parseDate(dateObject.getMonth() + 1);
-    const day = parseDate(dateObject.getDate());
-    const hour = parseDate(dateObject.getHours());
-    const minute = parseDate(dateObject.getMinutes());
-    const second = parseDate(dateObject.getSeconds());
-    return dateObject.getFullYear() + "" + month + "" + day + "" +
-        hour + "" + minute + "" + second;
+  const dateString = new Date().toLocaleString("en-us", { timeZone: "Africa/Nairobi" })
+  const dateObject = new Date(dateString);
+  const month = parseDate(dateObject.getMonth() + 1);
+  const day = parseDate(dateObject.getDate());
+  const hour = parseDate(dateObject.getHours());
+  const minute = parseDate(dateObject.getMinutes());
+  const second = parseDate(dateObject.getSeconds());
+  return dateObject.getFullYear() + "" + month + "" + day + "" +
+    hour + "" + minute + "" + second;
 }
 
 export const initiateSTKPush = async (req, res) => {
-    try {
-        const { amount, phone, Order_ID } = req.body;
+  try {
+    const { amount, phone, Order_ID, memberId } = req.body; // ADD: Extract memberId
 
-        // choose environment url
-        const url = process.env.ENVIRONMENT === 'production'
-            ? "https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest"
-            : "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest";
+    // Store memberId in payment_initiations table for later retrieval
+    const { error: paymentInitError } = await supabase
+      .from('payment_initiations')
+      .insert({
+        order_id: Order_ID,
+        member_id: memberId, // Store the memberId
+        payment_phone: phone,
+        amount: amount,
+        status: 'initiated'
+      });
 
-        const auth = "Bearer " + req.safaricom_access_token;
-        const timestamp = getTimestamp();
-        const password = Buffer.from(
-            process.env.BUSINESS_SHORT_CODE + process.env.PASS_KEY + timestamp
-        ).toString('base64');
-
-        // callback url
-        const callback_url = `https://mpesa-dogr.onrender.com/api/stkPushCallback/${Order_ID}`;
-
-        console.log(`📡 Initiating STK Push with callback: ${callback_url}`);
-
-        const payload = {
-            BusinessShortCode: process.env.BUSINESS_SHORT_CODE,
-            Password: password,
-            Timestamp: timestamp,
-            TransactionType: "CustomerPayBillOnline",
-            Amount: amount,
-            PartyA: phone,
-            PartyB: process.env.BUSINESS_SHORT_CODE,
-            PhoneNumber: phone,
-            CallBackURL: callback_url,
-            AccountReference: "venum",
-            TransactionDesc: "Paid online"
-        };
-
-        const response = await axios.post(url, payload, {
-            headers: { Authorization: auth }
-        });
-
-        res.status(200).json(response.data);
-
-    } catch (error) {
-        console.error("❌ Error while trying to create LipaNaMpesa details:", error.response?.data || error.message);
-        res.status(503).send({
-            message: "Something went wrong while trying to create LipaNaMpesa details. Contact admin.",
-            error: error.response?.data || error.message
-        });
+    if (paymentInitError) {
+      console.error('❌ Error storing payment initiation:', paymentInitError);
+      return res.status(500).json({
+        message: "Failed to store payment initiation",
+        error: paymentInitError
+      });
     }
-};
 
+    // choose environment url
+    const url = process.env.ENVIRONMENT === 'production'
+      ? "https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest"
+      : "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest";
+
+    const auth = "Bearer " + req.safaricom_access_token;
+    const timestamp = getTimestamp();
+    const password = Buffer.from(
+      process.env.BUSINESS_SHORT_CODE + process.env.PASS_KEY + timestamp
+    ).toString('base64');
+
+    // callback url
+    const callback_url = `https://mpesa-dogr.onrender.com/api/stkPushCallback/${Order_ID}`;
+
+    console.log(`📡 Initiating STK Push with callback: ${callback_url}`);
+
+    const payload = {
+      BusinessShortCode: process.env.BUSINESS_SHORT_CODE,
+      Password: password,
+      Timestamp: timestamp,
+      TransactionType: "CustomerPayBillOnline",
+      Amount: amount,
+      PartyA: phone,
+      PartyB: process.env.BUSINESS_SHORT_CODE,
+      PhoneNumber: phone,
+      CallBackURL: callback_url,
+      AccountReference: "venum",
+      TransactionDesc: "Paid online"
+    };
+
+    const response = await axios.post(url, payload, {
+      headers: { Authorization: auth }
+    });
+
+    res.status(200).json(response.data);
+
+  } catch (error) {
+    console.error("❌ Error while trying to create LipaNaMpesa details:", error.response?.data || error.message);
+    res.status(503).send({
+      message: "Something went wrong while trying to create LipaNaMpesa details. Contact admin.",
+      error: error.response?.data || error.message
+    });
+  }
+};
 
 
 // @desc callback route Safaricom will post transaction status
@@ -110,7 +128,7 @@ const querySTKStatus = async (checkoutRequestID) => {
 
 // CALLBACK HANDLER
 export const stkPushCallback = async (req, res) => {
-  const io = req.app.get('io'); // 🔌 Get Socket.IO instance
+  const io = req.app.get('io');
   try {
     console.log("📢 FULL CALLBACK RECEIVED:", JSON.stringify(req.body, null, 2));
     const { Order_ID } = req.params;
@@ -119,6 +137,21 @@ export const stkPushCallback = async (req, res) => {
     if (!callbackData) {
       throw new Error("Invalid callback structure: stkCallback missing");
     }
+
+    // RETRIEVE memberId from payment_initiations table
+    const { data: paymentInit, error: retrieveError } = await supabase
+      .from('payment_initiations')
+      .select('member_id, amount')
+      .eq('order_id', Order_ID)
+      .single();
+
+    if (retrieveError || !paymentInit) {
+      console.error('❌ Error retrieving payment initiation:', retrieveError);
+      throw new Error('Payment initiation not found');
+    }
+
+    const memberId = paymentInit.member_id;
+    console.log(`🔍 Retrieved memberId: ${memberId} for Order_ID: ${Order_ID}`);
 
     const {
       MerchantRequestID,
@@ -170,7 +203,7 @@ export const stkPushCallback = async (req, res) => {
       transactionDateISO = `${tdStr.slice(0, 4)}-${tdStr.slice(4, 6)}-${tdStr.slice(6, 8)}T${tdStr.slice(8, 10)}:${tdStr.slice(10, 12)}:${tdStr.slice(12, 14)}Z`;
     }
 
-    // Insert to Supabase
+    // UPDATED: Insert to Supabase WITH memberId
     const { error } = await supabase.rpc('insert_mpesa_callback', {
       p_order_id: Order_ID,
       p_merchant_request_id: MerchantRequestID,
@@ -181,6 +214,7 @@ export const stkPushCallback = async (req, res) => {
       p_mpesa_receipt_number: paymentDetails.MpesaReceiptNumber,
       p_transaction_date: transactionDateISO,
       p_phone_number: paymentDetails.PhoneNumber,
+      p_member_id: memberId // PASS the memberId to the function
     });
 
     if (error) {
@@ -188,12 +222,44 @@ export const stkPushCallback = async (req, res) => {
       throw new Error('Failed to save callback data');
     }
 
-    console.log("✅ M-Pesa callback saved to database");
+    console.log(`✅ M-Pesa callback saved to database with memberId: ${memberId}`);
+
+    // PROCESS CONTRIBUTION if payment was successful
+    if (ResultCode === 0 && paymentDetails.Amount) {
+      try {
+        const { data: contributionResult, error: contributionError } = await supabase
+          .rpc('make_contribution', {
+            p_member_id: memberId,
+            p_amount: paymentDetails.Amount,
+            p_payment_reference: paymentDetails.MpesaReceiptNumber
+          });
+
+        if (contributionError) {
+          console.error('❌ Error processing contribution:', contributionError);
+        } else {
+          console.log('✅ Contribution processed successfully:', contributionResult);
+        }
+
+        // Update payment_initiations status
+        await supabase
+          .from('payment_initiations')
+          .update({
+            status: 'completed',
+            mpesa_receipt: paymentDetails.MpesaReceiptNumber,
+            processed_at: new Date().toISOString()
+          })
+          .eq('order_id', Order_ID);
+
+      } catch (contributionError) {
+        console.error('❌ Error processing contribution:', contributionError);
+      }
+    }
 
     // 🔔 Emit status update to specific room (Order_ID)
     io.to(Order_ID).emit('paymentStatus', {
       event: 'payment_status',
       orderId: Order_ID,
+      memberId: memberId, // Include memberId in the response
       status: ResultCode === 0 ? 'success' : 'failed',
       receipt: paymentDetails.MpesaReceiptNumber,
       transactionId: CheckoutRequestID,
@@ -229,51 +295,51 @@ export const stkPushCallback = async (req, res) => {
 // @route /confirmPayment/:CheckoutRequestID
 // @access public
 export const confirmPayment = async (req, res) => {
-    try {
+  try {
 
 
-        const url = "https://sandbox.safaricom.co.ke/mpesa/stkpushquery/v1/query"
-        const auth = "Bearer " + req.safaricom_access_token
+    const url = "https://sandbox.safaricom.co.ke/mpesa/stkpushquery/v1/query"
+    const auth = "Bearer " + req.safaricom_access_token
 
-        const timestamp = getTimestamp()
-        //shortcode + passkey + timestamp
-        const password = new Buffer.from(process.env.BUSINESS_SHORT_CODE + process.env.PASS_KEY + timestamp).toString('base64')
+    const timestamp = getTimestamp()
+    //shortcode + passkey + timestamp
+    const password = new Buffer.from(process.env.BUSINESS_SHORT_CODE + process.env.PASS_KEY + timestamp).toString('base64')
 
 
-        request(
-            {
-                url: url,
-                method: "POST",
-                headers: {
-                    "Authorization": auth
-                },
-                json: {
-                    "BusinessShortCode": process.env.BUSINESS_SHORT_CODE,
-                    "Password": password,
-                    "Timestamp": timestamp,
-                    "CheckoutRequestID": req.params.CheckoutRequestID,
+    request(
+      {
+        url: url,
+        method: "POST",
+        headers: {
+          "Authorization": auth
+        },
+        json: {
+          "BusinessShortCode": process.env.BUSINESS_SHORT_CODE,
+          "Password": password,
+          "Timestamp": timestamp,
+          "CheckoutRequestID": req.params.CheckoutRequestID,
 
-                }
-            },
-            function (error, response, body) {
-                if (error) {
-                    console.log(error)
-                    res.status(503).send({
-                        message: "Something went wrong while trying to create LipaNaMpesa details. Contact admin",
-                        error: error
-                    })
-                } else {
-                    res.status(200).json(body)
-                }
-            }
-        )
-    } catch (e) {
-        console.error("Error while trying to create LipaNaMpesa details", e)
-        res.status(503).send({
+        }
+      },
+      function (error, response, body) {
+        if (error) {
+          console.log(error)
+          res.status(503).send({
             message: "Something went wrong while trying to create LipaNaMpesa details. Contact admin",
-            error: e
-        })
-    }
+            error: error
+          })
+        } else {
+          res.status(200).json(body)
+        }
+      }
+    )
+  } catch (e) {
+    console.error("Error while trying to create LipaNaMpesa details", e)
+    res.status(503).send({
+      message: "Something went wrong while trying to create LipaNaMpesa details. Contact admin",
+      error: e
+    })
+  }
 }
 
 
