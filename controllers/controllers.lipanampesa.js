@@ -29,17 +29,25 @@ const getTimestamp = () => {
 
 export const initiateSTKPush = async (req, res) => {
   try {
-    const { amount, phone, Order_ID, memberId } = req.body; // ADD: Extract memberId
+    const { amount, phone, Order_ID, memberId, payment_type_id } = req.body;
 
-    // Store memberId in payment_initiations table for later retrieval
+    // Validate required fields
+    if (!amount || !phone || !Order_ID || !memberId || !payment_type_id) {
+      return res.status(400).json({
+        message: "Missing required fields: amount, phone, Order_ID, memberId, payment_type_id"
+      });
+    }
+
+    // Store payment initiation with all necessary details
     const { error: paymentInitError } = await supabase
       .from('payment_initiations')
       .insert({
         order_id: Order_ID,
-        member_id: memberId, // Store the memberId
+        member_id: memberId,
         payment_phone: phone,
         amount: amount,
-        status: 'initiated'
+        status: 'initiated',
+        payment_type_id: payment_type_id,
       });
 
     if (paymentInitError) {
@@ -50,7 +58,9 @@ export const initiateSTKPush = async (req, res) => {
       });
     }
 
-    // choose environment url
+    console.log(`💾 Payment initiation stored: Order_ID=${Order_ID}, memberId=${memberId}, payment_type_id=${payment_type_id}`);
+
+    // Choose environment URL
     const url = process.env.ENVIRONMENT === 'production'
       ? "https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest"
       : "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest";
@@ -61,7 +71,7 @@ export const initiateSTKPush = async (req, res) => {
       process.env.BUSINESS_SHORT_CODE + process.env.PASS_KEY + timestamp
     ).toString('base64');
 
-    // callback url
+    // Callback URL
     const callback_url = `https://mpesa-dogr.onrender.com/api/stkPushCallback/${Order_ID}`;
 
     console.log(`📡 Initiating STK Push with callback: ${callback_url}`);
@@ -94,7 +104,6 @@ export const initiateSTKPush = async (req, res) => {
     });
   }
 };
-
 
 // @desc callback route Safaricom will post transaction status
 // @method POST
@@ -138,10 +147,10 @@ export const stkPushCallback = async (req, res) => {
       throw new Error("Invalid callback structure: stkCallback missing");
     }
 
-    // RETRIEVE memberId from payment_initiations table
+    // RETRIEVE memberId and payment_type_id from payment_initiations table
     const { data: paymentInit, error: retrieveError } = await supabase
       .from('payment_initiations')
-      .select('member_id, amount')
+      .select('member_id, amount, payment_type_id')
       .eq('order_id', Order_ID)
       .single();
 
@@ -151,7 +160,8 @@ export const stkPushCallback = async (req, res) => {
     }
 
     const memberId = paymentInit.member_id;
-    console.log(`🔍 Retrieved memberId: ${memberId} for Order_ID: ${Order_ID}`);
+    const paymentTypeId = paymentInit.payment_type_id;
+    console.log(`🔍 Retrieved memberId: ${memberId}, paymentTypeId: ${paymentTypeId} for Order_ID: ${Order_ID}`);
 
     const {
       MerchantRequestID,
@@ -224,20 +234,75 @@ export const stkPushCallback = async (req, res) => {
 
     console.log(`✅ M-Pesa callback saved to database with memberId: ${memberId}`);
 
-    // PROCESS CONTRIBUTION if payment was successful
+    // DYNAMIC PAYMENT TYPE HANDLING
     if (ResultCode === 0 && paymentDetails.Amount) {
       try {
-        const { data: contributionResult, error: contributionError } = await supabase
-          .rpc('make_contribution', {
-            p_member_id: memberId,
-            p_amount: paymentDetails.Amount,
-            p_payment_reference: paymentDetails.MpesaReceiptNumber
-          });
+        // Get payment type name for processing logic
+        const { data: paymentType, error: paymentTypeError } = await supabase
+          .from('payment_types')
+          .select('name')
+          .eq('id', paymentTypeId)
+          .single();
 
-        if (contributionError) {
-          console.error('❌ Error processing contribution:', contributionError);
-        } else {
-          console.log('✅ Contribution processed successfully:', contributionResult);
+        if (paymentTypeError) {
+          console.error('❌ Error retrieving payment type:', paymentTypeError);
+          throw new Error('Payment type not found');
+        }
+
+        const paymentTypeName = paymentType?.name?.toLowerCase();
+        console.log(`🔄 Processing payment type: ${paymentTypeName}`);
+
+        // Handle different payment types
+        switch (paymentTypeName) {
+          case 'registration':
+            console.log('📝 Processing registration payment...');
+            const { data: registrationResult, error: registrationError } = await supabase
+              .rpc('process_registration_payment', {
+                p_member_id: memberId,
+                p_amount: paymentDetails.Amount,
+                p_payment_reference: paymentDetails.MpesaReceiptNumber,
+                p_order_id: Order_ID
+              });
+
+            if (registrationError) {
+              console.error('❌ Error processing registration payment:', registrationError);
+            } else {
+              console.log('✅ Registration payment processed successfully:', registrationResult);
+            }
+            break;
+
+          case 'monthly_contribution':
+            console.log('💰 Processing monthly contribution...');
+            const { data: contributionResult, error: contributionError } = await supabase
+              .rpc('process_monthly_contribution', {
+                p_member_id: memberId,
+                p_amount: paymentDetails.Amount,
+                p_payment_reference: paymentDetails.MpesaReceiptNumber,
+                p_order_id: Order_ID
+              });
+
+            if (contributionError) {
+              console.error('❌ Error processing monthly contribution:', contributionError);
+            } else {
+              console.log('✅ Monthly contribution processed successfully:', contributionResult);
+            }
+            break;
+
+          default:
+            console.log('🔧 Processing default payment (general contribution)...');
+            const { data: defaultResult, error: defaultError } = await supabase
+              .rpc('make_contribution', {
+                p_member_id: memberId,
+                p_amount: paymentDetails.Amount,
+                p_payment_reference: paymentDetails.MpesaReceiptNumber
+              });
+
+            if (defaultError) {
+              console.error('❌ Error processing default contribution:', defaultError);
+            } else {
+              console.log('✅ Default contribution processed successfully:', defaultResult);
+            }
+            break;
         }
 
         // Update payment_initiations status
@@ -250,9 +315,29 @@ export const stkPushCallback = async (req, res) => {
           })
           .eq('order_id', Order_ID);
 
-      } catch (contributionError) {
-        console.error('❌ Error processing contribution:', contributionError);
+      } catch (processingError) {
+        console.error('❌ Error processing payment by type:', processingError);
+        
+        // Update payment_initiations with error status
+        await supabase
+          .from('payment_initiations')
+          .update({
+            status: 'processing_failed',
+            error_message: processingError.message,
+            processed_at: new Date().toISOString()
+          })
+          .eq('order_id', Order_ID);
       }
+    } else if (ResultCode !== 0) {
+      // Update payment_initiations status for failed payments
+      await supabase
+        .from('payment_initiations')
+        .update({
+          status: 'failed',
+          error_message: ResultDesc,
+          processed_at: new Date().toISOString()
+        })
+        .eq('order_id', Order_ID);
     }
 
     // 🔔 Emit status update to specific room (Order_ID)
@@ -260,6 +345,7 @@ export const stkPushCallback = async (req, res) => {
       event: 'payment_status',
       orderId: Order_ID,
       memberId: memberId, // Include memberId in the response
+      paymentTypeId: paymentTypeId, // Include payment type for frontend handling
       status: ResultCode === 0 ? 'success' : 'failed',
       receipt: paymentDetails.MpesaReceiptNumber,
       transactionId: CheckoutRequestID,
@@ -273,6 +359,20 @@ export const stkPushCallback = async (req, res) => {
 
   } catch (e) {
     console.error("❌ Error processing callback:", e.message);
+
+    // Update payment_initiations with error status
+    try {
+      await supabase
+        .from('payment_initiations')
+        .update({
+          status: 'callback_error',
+          error_message: e.message,
+          processed_at: new Date().toISOString()
+        })
+        .eq('order_id', req.params.Order_ID);
+    } catch (updateError) {
+      console.error('❌ Error updating payment initiation status:', updateError);
+    }
 
     io.to(req.params.Order_ID).emit('paymentStatus', {
       event: 'payment_status',
@@ -288,6 +388,7 @@ export const stkPushCallback = async (req, res) => {
     });
   }
 };
+
 
 
 // @desc Check from safaricom servers the status of a transaction
