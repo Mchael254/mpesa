@@ -296,7 +296,7 @@ export const stkPushCallback = async (req, res) => {
                 p_amount: paymentDetails.Amount,
                 p_payment_reference: paymentDetails.MpesaReceiptNumber
               });
-
+//
             if (defaultError) {
               console.error('❌ Error processing default contribution:', defaultError);
             } else {
