@@ -274,11 +274,10 @@ export const stkPushCallback = async (req, res) => {
           case 'monthly_contribution':
             console.log('💰 Processing monthly contribution...');
             const { data: contributionResult, error: contributionError } = await supabase
-              .rpc('process_monthly_contribution', {
+              .rpc('make_contribution', {
                 p_member_id: memberId,
                 p_amount: paymentDetails.Amount,
                 p_payment_reference: paymentDetails.MpesaReceiptNumber,
-                p_order_id: Order_ID
               });
 
             if (contributionError) {
