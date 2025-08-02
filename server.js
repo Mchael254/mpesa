@@ -3,6 +3,7 @@ import cors from "cors";
 import { createServer } from "http";
 import { Server as SocketIOServer } from "socket.io";
 import 'dotenv/config';
+import lipaNaMpesaRoutes from "./routes/routes.lipanampesa.js";
 
 // initialize express
 const app = express();
@@ -31,8 +32,7 @@ app.get('/', (req, res) => {
   res.send("Welcome to Venumux");
 });
 
-// import routes
-import lipaNaMpesaRoutes from "./routes/routes.lipanampesa.js";
+
 app.use('/api', lipaNaMpesaRoutes);
 
 // socket.io logic
