@@ -390,7 +390,7 @@ export const stkPushCallback = async (req, res) => {
 };
 
 
-
+//
 // @desc Check from safaricom servers the status of a transaction
 // @method GET
 // @route /confirmPayment/:CheckoutRequestID
