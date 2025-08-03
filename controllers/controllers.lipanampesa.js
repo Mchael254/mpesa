@@ -441,4 +441,22 @@ export const confirmPayment = async (req, res) => {
   }
 }
 
+export const warmupMpesa = async (req, res) => {
+  try {
+    
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    res.status(200).send({
+      message: "Service warmed up successfully",
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (e) {
+    console.error('Warmup failed:', e);
+    res.status(503).send({
+      message: "Warmup unsuccessful",
+      error: e.message 
+    });
+  }
+}
 

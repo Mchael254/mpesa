@@ -34,6 +34,50 @@ app.get('/', (req, res) => {
 
 
 app.use('/api', lipaNaMpesaRoutes);
+// Simple test route (add this right after your other routes)
+
+// Debug: List all registered routes
+app.use('/api', (req, res, next) => {
+  console.log(`Incoming API request to: ${req.path}`);
+  next(); // Continue to next middleware
+});
+
+// Debug: Print all routes (add this at the end BEFORE error handlers)
+console.log('\nRegistered Routes:');
+app._router.stack.forEach((layer) => {
+  if (layer.route) {
+    console.log(`→ ${layer.route.path}`);
+  } else if (layer.name === 'router') {
+    layer.handle.stack.forEach((sublayer) => {
+      if (sublayer.route) {
+        console.log(`→ /api${sublayer.route.path}`);
+      }
+    });
+  }
+});
+
+app.get('/api/test-payment-types', async (req, res) => {
+  try {
+    console.log('Test route hit!'); // Verify the route is being reached
+
+    // Direct Supabase call (same as your original implementation)
+    const { data, error } = await supabase.rpc('get_all_payment_types');
+
+    if (error) {
+      console.error('Supabase error:', error);
+      return res.status(500).json({ error: error.message });
+    }
+
+    console.log('Data retrieved:', data); // Log the response data
+    res.json(data);
+
+  } catch (e) {
+    console.error('Unexpected error:', e);
+    res.status(500).json({
+      error: e.message || 'Unknown error occurred'
+    });
+  }
+});
 
 // socket.io logic
 io.on("connection", (socket) => {
