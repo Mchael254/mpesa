@@ -443,14 +443,21 @@ export const confirmPayment = async (req, res) => {
 
 export const warmupMpesa = async (req, res) => {
   try {
-    
-    await new Promise(resolve => setTimeout(resolve, 100));
-    
+    const delay = parseInt(req.query.delay || '100', 10);
+
+    await new Promise(resolve => setTimeout(resolve, delay));
+
+    const io = req.app.get('io');
+    const socketStatus = io?.engine?.clientsCount ?? 0;
+
+    console.log(`[WARMUP] Pinged at ${new Date().toISOString()} | Active sockets: ${socketStatus}`);
+
     res.status(200).send({
       message: "Service warmed up successfully",
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      activeSockets: socketStatus
     });
-    
+
   } catch (e) {
     console.error('Warmup failed:', e);
     res.status(503).send({
@@ -458,5 +465,6 @@ export const warmupMpesa = async (req, res) => {
       error: e.message 
     });
   }
-}
+};
+
 
